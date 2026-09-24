@@ -1,0 +1,6 @@
+@ValetaxTest_HostAddress = http://localhost:5026
+
+GET {{ValetaxTest_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

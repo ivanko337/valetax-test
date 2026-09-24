@@ -1,0 +1,174 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: valetax-postgres
+    environment:
+      POSTGRES_USER: valetax
+      POSTGRES_PASSWORD: valetax_dev_password
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: valetax-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://127.0.0.1:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Keep the log directory compatible with the persisted Kafka volume.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data/kraft-combined-logs
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  api-gateway:
+    image: valetax/api-gateway:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+      args:
+        SERVICE: ApiGateway
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ReverseProxy__Clusters__partner-graph__Destinations__partner-graph__Address: http://partner-graph:8080/
+      ReverseProxy__Clusters__commissions__Destinations__commissions__Address: http://commissions:8080/
+      ReverseProxy__Clusters__wallet__Destinations__wallet__Address: http://wallet:8080/
+    ports:
+      - "5101:8080"
+    depends_on:
+      commissions:
+        condition: service_healthy
+      partner-graph:
+        condition: service_healthy
+      wallet:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  commissions:
+    image: valetax/commissions:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+      args:
+        SERVICE: Commissions
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=commissions;Username=valetax;Password=valetax_dev_password
+      Kafka__BootstrapServers: kafka:29092
+      PartnerGraphGrpc__Address: http://partner-graph:8081
+    ports:
+      - "5102:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      partner-graph:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  partner-graph:
+    image: valetax/partner-graph:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+      args:
+        SERVICE: PartnerGraph
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=partner_graph;Username=valetax;Password=valetax_dev_password
+      Kafka__BootstrapServers: kafka:29092
+      Kestrel__Endpoints__Rest__Url: http://+:8080
+      Kestrel__Endpoints__Rest__Protocols: Http1
+      Kestrel__Endpoints__Grpc__Url: http://+:8081
+      Kestrel__Endpoints__Grpc__Protocols: Http2
+    ports:
+      - "5103:8080"
+      - "5203:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  wallet:
+    image: valetax/wallet:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.service
+      args:
+        SERVICE: Wallet
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Database: Host=postgres;Port=5432;Database=wallet;Username=valetax;Password=valetax_dev_password
+      Kafka__BootstrapServers: kafka:29092
+    ports:
+      - "5105:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  kafka-data:

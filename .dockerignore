@@ -1,0 +1,13 @@
+.git
+.idea
+.vs
+**/.DS_Store
+**/bin
+**/obj
+**/*.user
+**/*.suo
+Common.Tests
+Commissions.Tests
+PartnerGraph.Tests
+Wallet.Tests
+README.md
